@@ -1,0 +1,5 @@
+numpy>=1.26
+numcodecs>=0.12,<0.18
+netCDF4>=1.6
+requests>=2.31
+packaging>=23

@@ -1,0 +1,13 @@
+.runtime_deps/
+.deps/
+__pycache__/
+*.pyc
+data/
+.gui_sessions/
+.queue_records/
+release/
+*.log
+*.bak
+*.tmp
+background_process.json
+python_path.txt
