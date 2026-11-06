@@ -1,7 +1,7 @@
 # ERA5-reanalysis-complete下载器v2.0
-[下载 Windows 64位便携包（约53 MB）](https://github.com/cchan4win-prog/ERA5_Download_For_Windows/raw/refs/heads/main/distributions/ERA5_Windows_v2.0.zip)
+[下载旧版 v2.0 Windows 64 位便携包（约 53 MB）](https://github.com/cchan4win-prog/ERA5_Download_For_Windows/raw/refs/heads/main/distributions/ERA5_Windows_v2.0.zip)
 
-完整解压后双击 `ERA5-reanalysis-complete下载器v2.0.exe`，无需安装 Python 或 Codex。点击“配置参数”使用图形界面；检查示例坐标和时间后再点“开始”。
+完整解压后双击 `ERA5-reanalysis-complete下载器v2.0.exe`，无需安装 Python 或 Codex。点击“配置参数”使用图形界面；检查示例坐标和时间后再点“开始”。自动重连版源码见当前分支，构建说明见下文。
 
 仓库仅包含程序、示例配置和分发包，不包含观测/下载数据、个人下载记录或凭据。
 
@@ -23,13 +23,13 @@
 
 ## 运行
 
-完整解压 `release/ERA5-reanalysis-complete下载器v2.0_可视化配置与真实高度版.zip`，双击 `ERA5-reanalysis-complete下载器v2.0.exe`。打开窗口不会启动下载，在可视化配置窗口保存后点击“开始”。便携包自带隔离 Python 和依赖，适用于 Windows 10/11 x64；需要可访问 Google Cloud Storage 的网络。请保留整个目录，不能只发送 EXE。
+完整解压 `release/ERA5_Downloader_Windows_x64_AutoReconnect.zip`，双击 `ERA5-reanalysis-complete下载器v2.0.exe`。首次使用时，在“配置参数”中填写自己的站点坐标和时段，保存后点击一次“开始”。遇到超时、断网、HTTP 408、429 或 5xx，程序会自动重连并续传。达到快速重试次数后，重试间隔从 15 秒逐步延长至 120 秒，直到连接恢复或用户取消。配置错误和永久性 HTTP 错误会停止队列，详情见日志。便携包自带隔离 Python 和依赖，适用于 Windows 10/11 x64；需要可访问 Google Cloud Storage 的网络。请保留整个目录，不能只发送 EXE。
 
 窗口仍只有开始、取消、暂停、继续、配置参数五个按钮。运行时开始和配置参数禁用；继续仅在暂停后可用。取消会终止当前和后续所有任务，保留文件和断点。合并校验期间暂停/继续不可用，但仍可取消。
 
 ## 队列配置
 
-根级参数是全局默认值；tasks 中的每个站点可以覆盖默认值，periods 中每个时段又可覆盖站点参数。按 tasks 及 periods 的书写顺序逐段执行，不会交叉下载不同站点；每段内部的小时文件并行。默认任务保留了升级前的选择，原单任务配置备份为 `config.before_v2.json`。旧单任务配置仍可运行。
+根级参数是全局默认值；tasks 中的每个站点可以覆盖默认值，periods 中每个时段又可覆盖站点参数。按 tasks 及 periods 的书写顺序逐段执行，不会交叉下载不同站点；每段内部的小时文件并行。便携包附带待填写的示例任务。旧单任务配置仍可运行。
 
 ```json
 {
@@ -78,7 +78,7 @@
 | levels | all 或整数层号列表；开启高度输入时必须 all（完整137层） |
 | variables | u,v,t,q,w,o3,d,vo,cc,clwc,ciwc,crwc,crwc,cswc 中的短名 |
 | include_height_inputs | 自动补齐 T/Q/SP/地表位势Z，并计算 LNSP |
-| timeout_seconds/retries | 每次请求超时/重试次数，默认45秒和4次 |
+| timeout_seconds/retries | 单次请求超时和快速重试次数，默认 45 秒和 4 次 |
 | output_dir | 数据输出根目录，相对程序目录或绝对路径 |
 
 旧版 `Asia/Shanghai` 单任务配置保留原来“日期用北京时间、hours用UTC”的含义，避免改变已存在任务；v2 tasks 中该名称统一解释为北京时间。推荐始终明确填写 beijing 或 UTC，通常不需要 hours_time_zone。

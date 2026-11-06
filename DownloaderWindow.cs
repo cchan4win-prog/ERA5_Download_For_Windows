@@ -165,7 +165,7 @@ sealed class DownloaderWindow : Form {
             worker = new Process();
             worker.StartInfo = new ProcessStartInfo {
                 FileName = Python(), WorkingDirectory = root,
-                Arguments = "-u " + Quote(Path.Combine(root, "download_queue.py")) +
+                Arguments = "-X utf8 -u " + Quote(Path.Combine(root, "download_queue.py")) +
                     " --config " + Quote(snapshot) +
                     " --status-file " + Quote(statusPath) + " --control-file " + Quote(controlPath),
                 UseShellExecute = false, CreateNoWindow = true,

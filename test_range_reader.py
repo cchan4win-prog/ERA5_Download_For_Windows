@@ -1,5 +1,6 @@
 """Check byte-range block reconstruction against complete Blosc decompression."""
 import unittest
+from unittest.mock import Mock
 import struct
 import tempfile
 from pathlib import Path
@@ -51,6 +52,7 @@ class RangeReaderTests(unittest.TestCase):
 
         class Session:
             def __init__(self, interrupt=False): self.interrupt = interrupt
+            def close(self): pass
             def get(self, url, headers, **kwargs):
                 seen.append(dict(headers))
                 offset = int(headers['Range'].split('=')[1].split('-')[0])
@@ -58,6 +60,21 @@ class RangeReaderTests(unittest.TestCase):
 
         cfg = dict(retries=0, timeout_seconds=1)
         with tempfile.TemporaryDirectory() as tmp:
+            http = HTTP(cfg, auto_reconnect=True)
+            http.cache_dir = Path(tmp) / 'automatic'
+            session = Session(interrupt=True)
+            http.local.session = session
+            def resume(delay=0):
+                if delay:
+                    self.assertEqual(delay, 15)
+                    self.assertEqual(next(http.cache_dir.glob('*.part')).stat().st_size, 7)
+                    session.interrupt = False
+            http.control.wait = Mock(side_effect=resume)
+            self.assertEqual(http.get('https://example.invalid/object', 0, 63), payload)
+            self.assertEqual(seen[-1]['Range'], 'bytes=7-63')
+            self.assertEqual(seen[-1]['If-Match'], '"version-1"')
+            http.control.wait.assert_any_call(15)
+            seen.clear()
             first = HTTP(cfg)
             first.cache_dir = Path(tmp)
             first.local.session = Session(interrupt=True)
@@ -78,6 +95,32 @@ class RangeReaderTests(unittest.TestCase):
             self.assertEqual(restarted.get('https://example.invalid/object', 0, 63), payload)
             self.assertEqual(len(seen), 3)
             self.assertEqual(seen[-1]['Range'], 'bytes=0-63')
+
+    def test_auto_reconnect_after_timeouts_and_http_errors(self):
+        cfg = dict(retries=1, timeout_seconds=1)
+        http = HTTP(cfg, auto_reconnect=True)
+        http.control.wait = Mock()
+        unavailable = requests.Response()
+        unavailable.status_code = 503
+        unavailable.url = 'https://example.invalid/object'
+        response = Mock()
+        response.__enter__ = Mock(return_value=unavailable)
+        response.__exit__ = Mock(return_value=False)
+        ok = Mock()
+        ok.__enter__ = Mock(return_value=Mock(content=b'data'))
+        ok.__exit__ = Mock(return_value=False)
+        http.local.session = Mock()
+        http.local.session.get.side_effect = [requests.Timeout(), response, ok]
+        self.assertEqual(http.get(unavailable.url), b'data')
+        http.control.wait.assert_any_call(1)
+        http.control.wait.assert_any_call(15)
+        self.assertEqual(http.local.session.close.call_count, 2)
+
+        unavailable.status_code = 404
+        http.local.session.get.side_effect = [response]
+        with self.assertRaises(requests.HTTPError):
+            http.get(unavailable.url)
+        self.assertEqual(http.local.session.get.call_count, 4)
 
     def test_blosc_blocks(self):
         rng = np.random.default_rng(81)

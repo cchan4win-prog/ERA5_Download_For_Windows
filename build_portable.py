@@ -10,7 +10,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / 'release'
-PACKAGE_NAME = 'ERA5-reanalysis-complete下载器v2.0_可视化配置与真实高度版'
+PACKAGE_NAME = 'ERA5_Downloader_Windows_x64_AutoReconnect'
 TARGET = DIST / PACKAGE_NAME
 
 
@@ -21,8 +21,12 @@ def build():
     if TARGET.exists() and '--refresh' not in sys.argv:
         raise RuntimeError(f'Build directory already exists; preserve or rename it before rebuilding: {TARGET}')
     TARGET.mkdir(exist_ok=True)
-    for name in ('ERA5-reanalysis-complete下载器v2.0.exe', 'config.json', 'config.multi.example.json', 'download_queue.py', 'download_google_era5.py', 'merge_downloads.py', 'compute_real_heights.py', 'era5_l137_coefficients.json'):
+    for name in ('ERA5-reanalysis-complete下载器v2.0.exe', 'config.multi.example.json', 'download_queue.py', 'download_google_era5.py', 'merge_downloads.py', 'compute_real_heights.py', 'era5_l137_coefficients.json'):
         shutil.copy2(ROOT / name, TARGET / name)
+    config = json.loads((ROOT / 'config.multi.example.json').read_text(encoding='utf-8'))
+    config['tasks'] = config['tasks'][:1]
+    config['tasks'][0]['periods'] = config['tasks'][0]['periods'][:1]
+    (TARGET / 'config.json').write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding='utf-8')
     shutil.copy2(ROOT / 'portable_README.txt', TARGET / '使用说明.txt')
     shutil.copy2(ROOT / 'README.md', TARGET / '详细说明.md')
     deps = TARGET / '.runtime_deps'

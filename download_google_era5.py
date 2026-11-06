@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -69,6 +70,7 @@ class DownloadControl:
         self.lock = threading.Lock()
         self.mode = 'run'
         self.checked = 0
+        self.aborted = threading.Event()
 
     def state(self, force=False):
         with self.lock:
@@ -82,18 +84,24 @@ class DownloadControl:
                     pass
             return self.mode
 
-    def wait(self):
+    def wait(self, delay=0):
+        deadline = time.monotonic() + delay
         while True:
             mode = self.state()
-            if mode == 'stop':
-                raise DownloadStopped('Stopped by user; resumable cache retained')
-            if mode != 'pause':
+            if self.aborted.is_set() or mode == 'stop':
+                raise DownloadStopped('Download interrupted; resumable cache retained')
+            remaining = deadline - time.monotonic()
+            if mode != 'pause' and remaining <= 0:
                 return
-            time.sleep(.1)
+            self.aborted.wait(.1 if mode == 'pause' else min(.1, remaining))
+
+
+class RetryableRangeError(IOError):
+    """The remote object changed or its transfer ended early."""
 
 
 class HTTP:
-    def __init__(self, cfg, control=None):
+    def __init__(self, cfg, control=None, auto_reconnect=False):
         self.cfg = cfg
         self.local = threading.local()
         self.lock = threading.Lock()
@@ -107,6 +115,8 @@ class HTTP:
         self.last_progress = 0
         self.control = control or DownloadControl()
         self.hour_bytes = {}
+        self.auto_reconnect = auto_reconnect
+        self.last_retry_log = float('-inf')
 
     def get(self, url, first=None, last=None):
         self.control.wait()
@@ -133,7 +143,8 @@ class HTTP:
                     final.unlink()
             except (OSError, ValueError):
                 pass
-        for attempt in range(self.cfg['retries'] + 1):
+        attempt = 0
+        while True:
             self.control.wait()
             try:
                 offset, etag = 0, None
@@ -165,7 +176,7 @@ class HTTP:
                             self.resumed_requests += bool(offset)
                         if r.status_code == 412 and part is not None:
                             part.write_bytes(b'')
-                            raise IOError('Source ETag changed; restarting this range')
+                            raise RetryableRangeError('Source ETag changed; restarting this range')
                         r.raise_for_status()
                         if first is not None:
                             expected = f'bytes {first + offset}-{last}/'
@@ -186,17 +197,42 @@ class HTTP:
                             data = r.content
                             self._received(len(data))
                 if first is not None and len(data) != expected_size:
-                    raise IOError('Truncated byte range; partial bytes retained for resume')
+                    raise RetryableRangeError('Truncated byte range; partial bytes retained for resume')
                 if part is not None:
                     info = json.loads(meta_path.read_text(encoding='utf-8'))
                     info['sha256'] = hashlib.sha256(data).hexdigest()
                     atomic_json(meta_path, info)
                     part.replace(final)
                 return data
-            except (requests.RequestException, IOError):
-                if attempt == self.cfg['retries']:
+            except (requests.RequestException, RetryableRangeError) as exc:
+                if isinstance(exc, requests.HTTPError):
+                    status = exc.response.status_code if exc.response is not None else 0
+                    transient = status in (408, 429) or 500 <= status < 600
+                else:
+                    transient = isinstance(exc, (
+                        requests.Timeout, requests.ConnectionError,
+                        requests.exceptions.ChunkedEncodingError, RetryableRangeError,
+                    )) and not isinstance(exc, requests.exceptions.SSLError)
+                if not transient:
                     raise
-                time.sleep(min(2 ** attempt, 10))
+
+                if attempt < self.cfg['retries']:
+                    delay = min(2 ** min(attempt, 4), 10)
+                elif not self.auto_reconnect:
+                    raise
+                else:
+                    delay = min(15 * 2 ** min(attempt - self.cfg['retries'], 4), 120)
+                    with self.lock:
+                        now = time.monotonic()
+                        if now - self.last_retry_log >= 15:
+                            self.last_retry_log = now
+                            print(f'连接暂时中断，{delay} 秒后自动重试：{exc}', flush=True)
+
+                # Drop pooled connections and retry only this request. Its
+                # .part and ETag are read again on the next attempt.
+                self.local.session.close()
+                self.control.wait(delay)
+                attempt += 1
 
     def _received(self, count):
         with self.lock:
@@ -517,7 +553,7 @@ def main(argv=None):
             raise ValueError('Height inputs require all 137 levels, ordered from 1 to 137')
         names = list(dict.fromkeys(names + ['t', 'q']))
     control = DownloadControl(args.control_file)
-    http = HTTP(cfg, control)
+    http = HTTP(cfg, control, auto_reconnect=not args.plan)
     ml = Store(http, ML)
     sfc = Store(http, SFC) if cfg['include_height_inputs'] else None
     lat, lon = ml.coord('latitude'), ml.coord('longitude')
@@ -676,7 +712,9 @@ def main(argv=None):
     submitted_hours = 0
     exhausted = False
     try:
-        with ThreadPoolExecutor(max_workers=cfg['workers']) as pool:
+        with ThreadPoolExecutor(max_workers=cfg['workers']) as pool, ExitStack() as cleanup:
+            # Wake retrying workers before the executor joins on a fatal error.
+            cleanup.callback(control.aborted.set)
             futures = {}
             while True:
                 if control.state() == 'stop':
